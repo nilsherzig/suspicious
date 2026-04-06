@@ -7,6 +7,7 @@ import (
 	"os/signal"
 	"strings"
 	"syscall"
+	"time"
 	"unsafe"
 
 	"golang.org/x/sys/unix"
@@ -126,7 +127,7 @@ func main() {
 			eventType := describeEvent(event.Mask)
 
 			// Print the event info
-			fmt.Printf("%s%s─── Zugriff erkannt ───%s\n", colorBold, colorCyan, colorReset)
+			fmt.Printf("%s%s─── Zugriff erkannt ──── %s%s%s\n", colorBold, colorCyan, colorReset, time.Now().Format("2006-01-02 15:04:05"), colorReset)
 			fmt.Printf("  Datei:   %s%s%s\n", colorYellow, filePath, colorReset)
 			if len(tree) > 0 {
 				fmt.Printf("  Prozess: %s%s%s (PID %d)\n", colorBold, tree[0].Name, colorReset, tree[0].Pid)
