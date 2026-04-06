@@ -1,6 +1,8 @@
 paths:
+  - /tmp/suspicious-watch # does not exist
   # - /home/user/documents
   # - /etc/secrets
-  - $HOME/.ssh
+  - $HOME/.ssh # remember this will monitor root's .ssh since the script runs as root
+  - /home/nils/.ssh
 
 allow_all: false

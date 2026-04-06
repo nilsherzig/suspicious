@@ -46,11 +46,12 @@ func main() {
 	}
 	defer unix.Close(fd)
 
+	marked := 0
 	for _, watchPath := range cfg.Paths {
 		info, err := os.Stat(watchPath)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "Fehler: %s existiert nicht: %v\n", watchPath, err)
-			os.Exit(1)
+			fmt.Fprintf(os.Stderr, "%sWarnung:%s %s nicht gefunden, wird übersprungen: %v\n", colorYellow, colorReset, watchPath, err)
+			continue
 		}
 
 		mask := uint64(unix.FAN_OPEN_PERM | unix.FAN_ACCESS_PERM)
@@ -64,8 +65,15 @@ func main() {
 		}
 
 		fmt.Printf("%s%s[fanotify-guard]%s Überwache: %s%s%s\n", colorBold, colorCyan, colorReset, colorYellow, watchPath, colorReset)
+		marked++
 	}
 
+	if marked == 0 {
+		fmt.Fprintf(os.Stderr, "Fehler: Kein einziger Pfad konnte überwacht werden.\n")
+		os.Exit(1)
+	}
+
+	pidCache := make(map[int32]uint32)
 	autoAllow := cfg.AllowAll
 	if autoAllow {
 		fmt.Printf("%s(Log-Modus: alles wird automatisch erlaubt)%s\n", colorCyan, colorReset)
@@ -111,8 +119,8 @@ func main() {
 			// Resolve the file path from the fd
 			filePath := resolveFilePath(event.Fd)
 
-			// Resolve process info from PID
-			procName, procCmdline := resolveProcess(event.Pid)
+			// Resolve process tree from PID
+			tree := resolveProcessTree(event.Pid)
 
 			// Determine event type
 			eventType := describeEvent(event.Mask)
@@ -120,8 +128,17 @@ func main() {
 			// Print the event info
 			fmt.Printf("%s%s─── Zugriff erkannt ───%s\n", colorBold, colorCyan, colorReset)
 			fmt.Printf("  Datei:   %s%s%s\n", colorYellow, filePath, colorReset)
-			fmt.Printf("  Prozess: %s%s%s (PID %d)\n", colorBold, procName, colorReset, event.Pid)
-			fmt.Printf("  Cmd:     %s\n", procCmdline)
+			if len(tree) > 0 {
+				fmt.Printf("  Prozess: %s%s%s (PID %d)\n", colorBold, tree[0].Name, colorReset, tree[0].Pid)
+				fmt.Printf("  Cmd:     %s\n", tree[0].Cmd)
+				if len(tree) > 1 {
+					parts := make([]string, len(tree))
+					for i, p := range tree {
+						parts[i] = p.Name
+					}
+					fmt.Printf("  Eltern:  %s\n", strings.Join(parts[1:], " ← "))
+				}
+			}
 			fmt.Printf("  Aktion:  %s\n", eventType)
 
 			var response uint32
@@ -129,21 +146,31 @@ func main() {
 				response = unix.FAN_ALLOW
 				fmt.Printf("  → %sautomatisch erlaubt%s\n\n", colorGreen, colorReset)
 			} else {
-				fmt.Printf("  Erlauben? [j/n/a]: ")
-				input, _ := reader.ReadString('\n')
-				input = strings.TrimSpace(strings.ToLower(input))
+				_, alreadyCached := pidCache[event.Pid]
+				response = resolveDecision(event.Pid, pidCache, func() uint32 {
+					fmt.Printf("  Erlauben? [%sJ%s/n/a]: ", colorGreen, colorReset)
+					input, _ := reader.ReadString('\n')
+					input = strings.TrimSpace(strings.ToLower(input))
 
-				switch input {
-				case "j", "y", "ja", "yes", "":
-					response = unix.FAN_ALLOW
-					fmt.Printf("  → %serlaubt%s\n\n", colorGreen, colorReset)
-				case "a", "all", "alle":
-					response = unix.FAN_ALLOW
-					autoAllow = true
-					fmt.Printf("  → %serlaubt (ab jetzt alles automatisch)%s\n\n", colorYellow, colorReset)
-				default:
-					response = unix.FAN_DENY
-					fmt.Printf("  → %sblockiert%s\n\n", colorRed, colorReset)
+					switch input {
+					case "a", "all", "alle":
+						autoAllow = true
+						fmt.Printf("  → %serlaubt (ab jetzt alles automatisch)%s\n\n", colorYellow, colorReset)
+						return unix.FAN_ALLOW
+					case "n", "nein", "no":
+						fmt.Printf("  → %sblockiert%s\n\n", colorRed, colorReset)
+						return unix.FAN_DENY
+					default: // j, y, ja, yes, ""
+						fmt.Printf("  → %serlaubt%s\n\n", colorGreen, colorReset)
+						return unix.FAN_ALLOW
+					}
+				})
+				if alreadyCached {
+					if response == unix.FAN_ALLOW {
+						fmt.Printf("  → %serlaubt (PID %d bereits bestätigt)%s\n\n", colorGreen, event.Pid, colorReset)
+					} else {
+						fmt.Printf("  → %sblockiert (PID %d bereits abgelehnt)%s\n\n", colorRed, event.Pid, colorReset)
+					}
 				}
 			}
 
@@ -166,6 +193,17 @@ func main() {
 	}
 }
 
+// resolveDecision returns a cached allow/deny for pid if already decided,
+// otherwise calls prompt() to get the user's decision and stores it.
+func resolveDecision(pid int32, cache map[int32]uint32, prompt func() uint32) uint32 {
+	if response, ok := cache[pid]; ok {
+		return response
+	}
+	response := prompt()
+	cache[pid] = response
+	return response
+}
+
 func writeFanotifyResponse(fd int, data []byte) error {
 	_, err := unix.Write(fd, data)
 	return err
@@ -180,30 +218,6 @@ func resolveFilePath(fd int32) string {
 	return path
 }
 
-func resolveProcess(pid int32) (name string, cmdline string) {
-	// Read comm (short process name)
-	commBytes, err := os.ReadFile(fmt.Sprintf("/proc/%d/comm", pid))
-	if err != nil {
-		name = "(unbekannt)"
-	} else {
-		name = strings.TrimSpace(string(commBytes))
-	}
-
-	// Read full cmdline
-	cmdBytes, err := os.ReadFile(fmt.Sprintf("/proc/%d/cmdline", pid))
-	if err != nil {
-		cmdline = "(nicht lesbar)"
-	} else {
-		// cmdline uses null bytes as separators
-		cmdline = strings.ReplaceAll(string(cmdBytes), "\x00", " ")
-		cmdline = strings.TrimSpace(cmdline)
-		if cmdline == "" {
-			cmdline = "(leer)"
-		}
-	}
-
-	return name, cmdline
-}
 
 func describeEvent(mask uint64) string {
 	var parts []string
