@@ -6,5 +6,6 @@ paths:
 - path: /home/nils/.config/openstack
 - allow_parent_chains:
   - kubectl,zsh,zsh,zsh,.ghostty-wrappe,.Hyprland-wrapp,start-hyprland,gdm-wayland-ses,gdm-session-wor,gdm,systemd
+  - kubectl,zsh,zsh,zsh,zsh,.ghostty-wrappe,.Hyprland-wrapp,start-hyprland,gdm-wayland-ses,gdm-session-wor,gdm,systemd
   path: /home/nils/.kube
 - path: /home/nils/.gnupg

@@ -36,6 +36,13 @@ All code lives in `package main`. Key files:
 | `process.go` | `resolveProcessTree` — walks `/proc/<pid>/status` PPid chain to build child→root ancestry |
 | `config.yaml` | Example config: `paths` list + `allow_all` toggle |
 
+### PathConfig fields
+
+Each entry under `paths` supports:
+- `path` (string) — directory or file to watch
+- `allow_binaries` (list) — executable paths auto-allowed without prompting
+- `allow_parent_chains` (list) — comma-separated ancestor process name chains that are auto-allowed (e.g. `git,lazygit,zsh`); matched as a prefix of the process tree from child→root
+
 ### Decision caching
 
 `resolveDecision` (in `main.go`) caches allow/deny per `(pid, path)` pair in a `map[pidFileKey]uint32`. Each unique `(pid, filePath)` combination prompts exactly once per run. `autoAllow` (`allow_all: true` or pressing `a`) bypasses prompting entirely and logs-only.
@@ -50,5 +57,5 @@ All code lives in `package main`. Key files:
 
 ### Test structure
 
-- `config_test.go`, `process_test.go`, `decision_test.go` — unit tests, no root needed
+- `config_test.go`, `config_chain_test.go`, `process_test.go`, `decision_test.go` — unit tests, no root needed
 - `integration_test.go` — build tag `integration`; spawns the real binary, drives it via stdin, asserts output contains expected strings (German UI text like `"Zugriff erkannt"`, `"blockiert"`)
