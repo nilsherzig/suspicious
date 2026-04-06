@@ -178,6 +178,7 @@ func TestFindPathConfig(t *testing.T) {
 		Paths: []PathConfig{
 			{Path: "/tmp/watched", AllowBinaries: []string{"/usr/bin/cat"}},
 			{Path: "/etc/secrets"},
+			{Path: "/home/nils/.kube"}, // stored without trailing slash (as loadConfig does)
 		},
 	}
 
@@ -190,6 +191,8 @@ func TestFindPathConfig(t *testing.T) {
 		{"/tmp/watched", "/tmp/watched", false},
 		{"/tmp/other/file.txt", "", true},
 		{"/etc/secrets/key", "/etc/secrets", false},
+		// trailing slash in config path must still match children
+		{"/home/nils/.kube/config", "/home/nils/.kube", false},
 	}
 
 	for _, tc := range tests {

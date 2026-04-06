@@ -132,7 +132,7 @@ func loadConfig(path string) (*Config, error) {
 	}
 
 	for i := range cfg.Paths {
-		cfg.Paths[i].Path = os.ExpandEnv(cfg.Paths[i].Path)
+		cfg.Paths[i].Path = strings.TrimRight(os.ExpandEnv(cfg.Paths[i].Path), "/")
 		for j, b := range cfg.Paths[i].AllowBinaries {
 			cfg.Paths[i].AllowBinaries[j] = os.ExpandEnv(b)
 		}
