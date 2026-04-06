@@ -25,7 +25,8 @@ If no CLI is attached when an event arrives, the daemon **auto-denies** after a 
 
 - Linux kernel ≥ 5.1
 - Go ≥ 1.21 (to build)
-- `CAP_SYS_ADMIN` capability (or root) to run the daemon
+- `CAP_SYS_ADMIN` — required for `fanotify_init` with `FAN_CLASS_CONTENT`
+- `CAP_DAC_READ_SEARCH` — required to traverse directories owned by other users (e.g. watching paths under `/home/<user>` when running as a different uid)
 
 ## Build
 
@@ -41,6 +42,76 @@ sudo SUSPICIOUS_SOCKET=/tmp/suspicious.sock suspicious config.yaml
 
 # Terminal 2 — attach the interactive CLI (no root needed once socket exists)
 SUSPICIOUS_SOCKET=/tmp/suspicious.sock suspicious attach
+```
+
+## Install on NixOS
+
+Add the flake input and import the module:
+
+```nix
+# flake.nix
+inputs.suspicious.url = "github:nilsherzig/suspicious";
+inputs.suspicious.inputs.nixpkgs.follows = "nixpkgs";
+```
+
+```nix
+# configuration.nix (or any module)
+{ suspicious, ... }:
+{
+  imports = [ ./suspicious.nix ];
+}
+```
+
+```nix
+# suspicious.nix
+{ suspicious, ... }:
+{
+  users.groups.suspicious = { };
+  users.users.suspicious = { isSystemUser = true; group = "suspicious"; };
+
+  # Add users who need 'suspicious attach' to the group
+  users.users.YOUR_USER.extraGroups = [ "suspicious" ];
+  users.users.YOUR_USER.packages = [ suspicious.packages.x86_64-linux.default ];
+
+  environment.etc."suspicious/config.yaml".text = ''
+    paths:
+      - path: /home/YOUR_USER/.ssh
+    allow_all: false
+  '';
+
+  systemd.services.suspicious = {
+    description = "suspicious - fanotify file access monitor";
+    after = [ "local-fs.target" ];
+    wantedBy = [ "multi-user.target" ];
+    serviceConfig = {
+      User = "suspicious";
+      Group = "suspicious";
+      AmbientCapabilities = "CAP_SYS_ADMIN CAP_DAC_READ_SEARCH";
+      CapabilityBoundingSet = "CAP_SYS_ADMIN CAP_DAC_READ_SEARCH";
+      RuntimeDirectory = "suspicious";
+      RuntimeDirectoryMode = "0750";
+      ExecStart = "${suspicious.packages.x86_64-linux.default}/bin/suspicious /etc/suspicious/config.yaml";
+      NoNewPrivileges = true;
+      ProtectSystem = "full";
+      ProtectHome = false;
+      PrivateTmp = true;
+      RestrictAddressFamilies = "AF_UNIX";
+      RestrictNamespaces = true;
+      SystemCallFilter = "@system-service fanotify_init fanotify_mark";
+      Restart = "on-failure";
+      RestartSec = 5;
+    };
+  };
+}
+```
+
+Pass `suspicious` via `specialArgs` when building your NixOS configuration:
+
+```nix
+nixpkgs.lib.nixosSystem {
+  specialArgs = { inherit suspicious; };
+  modules = [ ./configuration.nix ];
+};
 ```
 
 ## Install as a systemd service
@@ -158,8 +229,8 @@ User=suspicious
 Group=suspicious
 
 # Only this capability is needed — not full root.
-AmbientCapabilities=CAP_SYS_ADMIN
-CapabilityBoundingSet=CAP_SYS_ADMIN
+AmbientCapabilities=CAP_SYS_ADMIN CAP_DAC_READ_SEARCH
+CapabilityBoundingSet=CAP_SYS_ADMIN CAP_DAC_READ_SEARCH
 
 # systemd creates /run/suspicious/ owned by the service user.
 RuntimeDirectory=suspicious
@@ -168,12 +239,12 @@ RuntimeDirectoryMode=0750
 ExecStart=/usr/local/bin/suspicious /etc/suspicious/config.yaml
 
 NoNewPrivileges=yes
-ProtectSystem=strict
-ProtectHome=read-only
+ProtectSystem=full
+ProtectHome=no
 PrivateTmp=yes
 RestrictAddressFamilies=AF_UNIX
 RestrictNamespaces=yes
-SystemCallFilter=@system-service
+SystemCallFilter=@system-service fanotify_init fanotify_mark
 
 Restart=on-failure
 RestartSec=5

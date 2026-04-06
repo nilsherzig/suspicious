@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this project does
 
-`suspicious` is a Linux file-access monitoring daemon that uses the kernel's **fanotify** API (`FAN_OPEN_PERM` / `FAN_ACCESS_PERM`) to intercept and allow/deny file reads in real time. When a process touches a watched path, the daemon prompts the operator interactively (j/n/a) before the kernel returns control to the calling process. The binary must run as root (requires `CAP_SYS_ADMIN`).
+`suspicious` is a Linux file-access monitoring daemon that uses the kernel's **fanotify** API (`FAN_OPEN_PERM` / `FAN_ACCESS_PERM`) to intercept and allow/deny file reads in real time. When a process touches a watched path, the daemon prompts the operator interactively (j/n/a) before the kernel returns control to the calling process. The daemon requires `CAP_SYS_ADMIN` (for fanotify) and `CAP_DAC_READ_SEARCH` (to traverse directories owned by other users).
 
 ## Commands
 
@@ -35,6 +35,7 @@ All code lives in `package main`. Key files:
 | `config.go` | `loadConfig` — parses `config.yaml`, expands env vars |
 | `process.go` | `resolveProcessTree` — walks `/proc/<pid>/status` PPid chain to build child→root ancestry |
 | `config.yaml` | Example config: `paths` list + `allow_all` toggle |
+| `flake.nix` | Nix flake — builds the binary and exposes it as `packages.default` |
 
 ### PathConfig fields
 
