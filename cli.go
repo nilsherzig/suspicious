@@ -141,6 +141,17 @@ func runAttach(socketPath string) {
 			fmt.Fprintf(os.Stderr, "Fehler beim Senden der Entscheidung: %v\n", err)
 			return
 		}
+
+		switch {
+		case resp.WhitelistChain:
+			fmt.Printf("  → %sErlaubt + Elternkette zur Whitelist hinzugefügt%s\n\n", colorGreen, colorReset)
+		case resp.AutoAllowAll:
+			fmt.Printf("  → %sAlle weiteren Zugriffe erlaubt (Log-Modus)%s\n\n", colorYellow, colorReset)
+		case resp.Allow:
+			fmt.Printf("  → %sErlaubt%s\n\n", colorGreen, colorReset)
+		default:
+			fmt.Printf("  → %sAbgelehnt%s\n\n", colorRed, colorReset)
+		}
 	}
 }
 
