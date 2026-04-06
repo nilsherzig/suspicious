@@ -2,7 +2,6 @@ package main
 
 import (
 	"bufio"
-	"flag"
 	"fmt"
 	"os"
 	"os/signal"
@@ -24,19 +23,14 @@ const (
 )
 
 func main() {
-	watchPath := flag.String("path", "", "file or directory to watch")
-	allowAll := flag.Bool("allow-all", false, "log only, allow everything without prompting")
-	flag.Parse()
-
-	if *watchPath == "" {
-		fmt.Fprintf(os.Stderr, "Usage: %s -path /pfad/zur/datei [-allow-all]\n", os.Args[0])
-		os.Exit(1)
+	configPath := "config.yaml"
+	if len(os.Args) > 1 {
+		configPath = os.Args[1]
 	}
 
-	// Verify path exists
-	info, err := os.Stat(*watchPath)
+	cfg, err := loadConfig(configPath)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Fehler: %s existiert nicht: %v\n", *watchPath, err)
+		fmt.Fprintf(os.Stderr, "Fehler beim Laden der Config (%s): %v\n", configPath, err)
 		os.Exit(1)
 	}
 
@@ -52,20 +46,28 @@ func main() {
 	}
 	defer unix.Close(fd)
 
-	// Mark the target with permission events
-	mask := uint64(unix.FAN_OPEN_PERM | unix.FAN_ACCESS_PERM)
-	if info.IsDir() {
-		mask |= unix.FAN_EVENT_ON_CHILD
+	for _, watchPath := range cfg.Paths {
+		info, err := os.Stat(watchPath)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Fehler: %s existiert nicht: %v\n", watchPath, err)
+			os.Exit(1)
+		}
+
+		mask := uint64(unix.FAN_OPEN_PERM | unix.FAN_ACCESS_PERM)
+		if info.IsDir() {
+			mask |= unix.FAN_EVENT_ON_CHILD
+		}
+
+		if err := unix.FanotifyMark(fd, unix.FAN_MARK_ADD, mask, unix.AT_FDCWD, watchPath); err != nil {
+			fmt.Fprintf(os.Stderr, "fanotify_mark fehlgeschlagen für %s: %v\n", watchPath, err)
+			os.Exit(1)
+		}
+
+		fmt.Printf("%s%s[fanotify-guard]%s Überwache: %s%s%s\n", colorBold, colorCyan, colorReset, colorYellow, watchPath, colorReset)
 	}
 
-	err = unix.FanotifyMark(fd, unix.FAN_MARK_ADD, mask, unix.AT_FDCWD, *watchPath)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "fanotify_mark fehlgeschlagen: %v\n", err)
-		os.Exit(1)
-	}
-
-	fmt.Printf("%s%s[fanotify-guard]%s Überwache: %s%s%s\n", colorBold, colorCyan, colorReset, colorYellow, *watchPath, colorReset)
-	if *allowAll {
+	autoAllow := cfg.AllowAll
+	if autoAllow {
 		fmt.Printf("%s(Log-Modus: alles wird automatisch erlaubt)%s\n", colorCyan, colorReset)
 	} else {
 		fmt.Printf("Beantworte Zugriffe mit: %s[j]a%s / %s[n]ein%s / %s[a]lle erlauben%s\n",
@@ -84,7 +86,6 @@ func main() {
 	}()
 
 	reader := bufio.NewReader(os.Stdin)
-	autoAllow := *allowAll
 	eventSize := int(unsafe.Sizeof(unix.FanotifyEventMetadata{}))
 	buf := make([]byte, 4096)
 

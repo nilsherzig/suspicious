@@ -1,0 +1,189 @@
+//go:build integration
+
+package main
+
+import (
+	"bufio"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strings"
+	"testing"
+	"time"
+)
+
+// These tests require root / CAP_SYS_ADMIN (fanotify).
+// Run with: sudo go test -tags integration -v ./...
+
+func TestFanotifyDetectsFileAccess(t *testing.T) {
+	dir := filepath.Join("testfiles", "detect_access")
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.RemoveAll(dir) })
+
+	targetFile := filepath.Join(dir, "secret.txt")
+	if err := os.WriteFile(targetFile, []byte("sensitive"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	cfgPath := writeTempConfig(t, []string{dir}, true)
+
+	cmd := exec.Command(suspiciousBinary(t), cfgPath)
+	out, err := startAndCapture(t, cmd)
+
+	// Give the process time to initialize fanotify
+	time.Sleep(300 * time.Millisecond)
+
+	// Trigger an access
+	f, err := os.Open(targetFile)
+	if err != nil {
+		t.Fatalf("open target file: %v", err)
+	}
+	f.Close()
+
+	time.Sleep(200 * time.Millisecond)
+	cmd.Process.Signal(os.Interrupt)
+	time.Sleep(100 * time.Millisecond)
+
+	output := out.String()
+	if !strings.Contains(output, "secret.txt") {
+		t.Errorf("expected output to mention secret.txt, got:\n%s", output)
+	}
+	if !strings.Contains(output, "Zugriff erkannt") {
+		t.Errorf("expected 'Zugriff erkannt' in output, got:\n%s", output)
+	}
+}
+
+func TestFanotifyDetectsDirectoryAccess(t *testing.T) {
+	dir := filepath.Join("testfiles", "detect_dir")
+	subdir := filepath.Join(dir, "subdir")
+	if err := os.MkdirAll(subdir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.RemoveAll(dir) })
+
+	fileInSubdir := filepath.Join(subdir, "data.txt")
+	if err := os.WriteFile(fileInSubdir, []byte("data"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	cfgPath := writeTempConfig(t, []string{dir}, true)
+
+	cmd := exec.Command(suspiciousBinary(t), cfgPath)
+	out, err := startAndCapture(t, cmd)
+	_ = err
+
+	time.Sleep(300 * time.Millisecond)
+
+	f, openErr := os.Open(fileInSubdir)
+	if openErr != nil {
+		t.Fatalf("open file in subdir: %v", openErr)
+	}
+	f.Close()
+
+	time.Sleep(200 * time.Millisecond)
+	cmd.Process.Signal(os.Interrupt)
+	time.Sleep(100 * time.Millisecond)
+
+	output := out.String()
+	if !strings.Contains(output, "data.txt") {
+		t.Errorf("expected output to mention data.txt, got:\n%s", output)
+	}
+}
+
+func TestFanotifyBlocksAccess(t *testing.T) {
+	dir := filepath.Join("testfiles", "block_access")
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.RemoveAll(dir) })
+
+	targetFile := filepath.Join(dir, "blocked.txt")
+	if err := os.WriteFile(targetFile, []byte("blocked content"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	cfgPath := writeTempConfig(t, []string{dir}, false)
+
+	// Pipe "n\n" to stdin so every access is denied
+	cmd := exec.Command(suspiciousBinary(t), cfgPath)
+	cmd.Stdin = strings.NewReader("n\n")
+	out, _ := startAndCapture(t, cmd)
+
+	time.Sleep(300 * time.Millisecond)
+
+	// This open should be blocked (FAN_DENY)
+	_, openErr := os.Open(targetFile)
+
+	time.Sleep(200 * time.Millisecond)
+	cmd.Process.Signal(os.Interrupt)
+	time.Sleep(100 * time.Millisecond)
+
+	output := out.String()
+	if !strings.Contains(output, "blockiert") {
+		t.Errorf("expected 'blockiert' in output, got:\n%s", output)
+	}
+	if openErr == nil {
+		t.Error("expected open to fail due to FAN_DENY, but it succeeded")
+	}
+}
+
+// writeTempConfig writes a config.yaml to a temp file and returns its path.
+func writeTempConfig(t *testing.T, paths []string, allowAll bool) string {
+	t.Helper()
+	var sb strings.Builder
+	sb.WriteString("paths:\n")
+	for _, p := range paths {
+		sb.WriteString("  - " + p + "\n")
+	}
+	if allowAll {
+		sb.WriteString("allow_all: true\n")
+	} else {
+		sb.WriteString("allow_all: false\n")
+	}
+	f, err := os.CreateTemp(t.TempDir(), "config-*.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.WriteString(sb.String())
+	f.Close()
+	return f.Name()
+}
+
+// suspiciousBinary builds the binary and returns its path.
+func suspiciousBinary(t *testing.T) string {
+	t.Helper()
+	bin := filepath.Join(t.TempDir(), "suspicious")
+	out, err := exec.Command("go", "build", "-o", bin, ".").CombinedOutput()
+	if err != nil {
+		t.Fatalf("build failed: %v\n%s", err, out)
+	}
+	return bin
+}
+
+// startAndCapture starts the command and returns a buffer that captures stdout+stderr.
+func startAndCapture(t *testing.T, cmd *exec.Cmd) (*strings.Builder, error) {
+	t.Helper()
+	var buf strings.Builder
+	pr, pw, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	cmd.Stdout = pw
+	cmd.Stderr = pw
+	if err := cmd.Start(); err != nil {
+		t.Fatalf("start command: %v", err)
+	}
+	go func() {
+		scanner := bufio.NewScanner(pr)
+		for scanner.Scan() {
+			buf.WriteString(scanner.Text() + "\n")
+		}
+	}()
+	t.Cleanup(func() {
+		pw.Close()
+		pr.Close()
+	})
+	return &buf, nil
+}

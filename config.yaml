@@ -1,0 +1,6 @@
+paths:
+  # - /home/user/documents
+  # - /etc/secrets
+  - $HOME/.ssh
+
+allow_all: false
