@@ -4,4 +4,6 @@ go 1.26.1
 
 require golang.org/x/sys v0.42.0
 
-require gopkg.in/yaml.v3 v3.0.1
+require sigs.k8s.io/yaml v1.6.0
+
+require go.yaml.in/yaml/v2 v2.4.2 // indirect

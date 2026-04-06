@@ -1,30 +1,54 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"strings"
 
-	"gopkg.in/yaml.v3"
+	"sigs.k8s.io/yaml"
 )
 
-type PathConfig struct {
-	Path          string   `yaml:"path"`
-	AllowBinaries []string `yaml:"allow_binaries"`
+// ParentChain is a slice of process names serialized as a comma-separated string.
+// Example YAML:  - git,lazygit,zsh
+type ParentChain []string
+
+func (c *ParentChain) UnmarshalJSON(data []byte) error {
+	var s string
+	if err := json.Unmarshal(data, &s); err != nil {
+		return err
+	}
+	parts := strings.Split(s, ",")
+	for i, p := range parts {
+		parts[i] = strings.TrimSpace(p)
+	}
+	*c = parts
+	return nil
 }
 
-// UnmarshalYAML supports both plain string and object format:
+func (c ParentChain) MarshalJSON() ([]byte, error) {
+	return json.Marshal(strings.Join(c, ","))
+}
+
+type PathConfig struct {
+	Path              string        `json:"path"`
+	AllowBinaries     []string      `json:"allow_binaries,omitempty"`
+	AllowParentChains []ParentChain `json:"allow_parent_chains,omitempty"`
+}
+
+// UnmarshalJSON supports both plain string and object format:
 //
 //	- /tmp/foo
 //	- path: /tmp/foo
 //	  allow_binaries: [/usr/bin/nvim]
-func (p *PathConfig) UnmarshalYAML(value *yaml.Node) error {
-	if value.Kind == yaml.ScalarNode {
-		p.Path = value.Value
+func (p *PathConfig) UnmarshalJSON(data []byte) error {
+	var s string
+	if err := json.Unmarshal(data, &s); err == nil {
+		p.Path = s
 		return nil
 	}
 	type raw PathConfig
-	return value.Decode((*raw)(p))
+	return json.Unmarshal(data, (*raw)(p))
 }
 
 func (p *PathConfig) isBinaryAllowed(exePath string) bool {
@@ -39,9 +63,30 @@ func (p *PathConfig) isBinaryAllowed(exePath string) bool {
 	return false
 }
 
+func (p *PathConfig) isParentChainAllowed(tree []ProcessInfo) bool {
+	for _, chain := range p.AllowParentChains {
+		if matchesChain(tree, chain) {
+			return true
+		}
+	}
+	return false
+}
+
+func matchesChain(tree []ProcessInfo, chain ParentChain) bool {
+	if len(chain) > len(tree) {
+		return false
+	}
+	for i, name := range chain {
+		if tree[i].Name != name {
+			return false
+		}
+	}
+	return true
+}
+
 type Config struct {
-	Paths    []PathConfig `yaml:"paths"`
-	AllowAll bool         `yaml:"allow_all"`
+	Paths    []PathConfig `json:"paths"`
+	AllowAll bool         `json:"allow_all,omitempty"`
 }
 
 func (c *Config) findPathConfig(filePath string) *PathConfig {
@@ -50,6 +95,23 @@ func (c *Config) findPathConfig(filePath string) *PathConfig {
 		if filePath == p.Path || strings.HasPrefix(filePath, p.Path+"/") {
 			return p
 		}
+	}
+	return nil
+}
+
+func (c *Config) addParentChain(filePath string, chain ParentChain, configPath string) error {
+	pc := c.findPathConfig(filePath)
+	if pc == nil {
+		return fmt.Errorf("kein Pfad-Eintrag für %s gefunden, chain nicht gespeichert", filePath)
+	}
+	pc.AllowParentChains = append(pc.AllowParentChains, chain)
+
+	data, err := yaml.Marshal(c)
+	if err != nil {
+		return fmt.Errorf("config serialisieren: %w", err)
+	}
+	if err := os.WriteFile(configPath, data, 0644); err != nil {
+		return fmt.Errorf("config schreiben: %w", err)
 	}
 	return nil
 }

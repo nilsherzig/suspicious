@@ -143,16 +143,20 @@ func main() {
 			fmt.Printf("  Aktion:  %s\n", eventType)
 
 			var response uint32
+			pathCfg := cfg.findPathConfig(filePath)
 			if autoAllow {
 				response = unix.FAN_ALLOW
 				fmt.Printf("  → %sautomatisch erlaubt%s\n\n", colorGreen, colorReset)
-			} else if pathCfg := cfg.findPathConfig(filePath); pathCfg != nil && pathCfg.isBinaryAllowed(resolveProcessExe(event.Pid)) {
+			} else if pathCfg != nil && pathCfg.isBinaryAllowed(resolveProcessExe(event.Pid)) {
 				response = unix.FAN_ALLOW
 				fmt.Printf("  → %serlaubt (whitelisted binary)%s\n\n", colorGreen, colorReset)
+			} else if pathCfg != nil && pathCfg.isParentChainAllowed(tree) {
+				response = unix.FAN_ALLOW
+				fmt.Printf("  → %serlaubt (whitelisted parent chain)%s\n\n", colorGreen, colorReset)
 			} else {
 				_, alreadyCached := pidCache[pidFileKey{pid: event.Pid, path: filePath}]
 				response = resolveDecision(event.Pid, filePath, pidCache, func() uint32 {
-					fmt.Printf("  Erlauben? [%sJ%s/n/a]: ", colorGreen, colorReset)
+					fmt.Printf("  Erlauben? [%sJ%s/n/a/%sw%s=chain whitelist]: ", colorGreen, colorReset, colorYellow, colorReset)
 					input, _ := reader.ReadString('\n')
 					input = strings.TrimSpace(strings.ToLower(input))
 
@@ -164,6 +168,14 @@ func main() {
 					case "n", "nein", "no":
 						fmt.Printf("  → %sblockiert%s\n\n", colorRed, colorReset)
 						return unix.FAN_DENY
+					case "w":
+						chain := make(ParentChain, len(tree))
+						for i, p := range tree {
+							chain[i] = p.Name
+						}
+						addChainToWhitelist(cfg, configPath, filePath, chain)
+						fmt.Printf("  → %serlaubt (chain zur Whitelist hinzugefügt)%s\n\n", colorYellow, colorReset)
+						return unix.FAN_ALLOW
 					default: // j, y, ja, yes, ""
 						fmt.Printf("  → %serlaubt%s\n\n", colorGreen, colorReset)
 						return unix.FAN_ALLOW
@@ -236,6 +248,16 @@ func resolveFilePath(fd int32) string {
 	return path
 }
 
+
+// addChainToWhitelist appends chain to the allow_parent_chains of the PathConfig
+// matching filePath, then persists the updated config to disk.
+func addChainToWhitelist(cfg *Config, configPath string, filePath string, chain ParentChain) {
+	if err := cfg.addParentChain(filePath, chain, configPath); err != nil {
+		fmt.Fprintf(os.Stderr, "  %v\n", err)
+		return
+	}
+	fmt.Printf("  %sChain gespeichert in %s%s\n", colorCyan, configPath, colorReset)
+}
 
 func describeEvent(mask uint64) string {
 	var parts []string

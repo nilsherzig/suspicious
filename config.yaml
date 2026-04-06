@@ -1,10 +1,18 @@
 paths:
-  - /tmp/suspicious-watch # does not exist
-  # Einfacher Pfad (wie bisher):
-  - /home/nils/.ssh
-  # Pfad als Objekt mit Binary-Whitelist:
-  - path: /home/nils/dotfiles/nvim
-    allow_binaries:
-      - /etc/profiles/per-user/nils/bin/nvim
-
+- path: /tmp/suspicious-watch
+  allow_binaries: []
+  allow_parent_chains: []
+- path: /home/nils/.ssh
+  allow_binaries: []
+  allow_parent_chains:
+  - ssh,git,lazygit,zsh,.ghostty-wrappe
+- path: /home/nils/.config/openstack
+  allow_binaries: []
+  allow_parent_chains: []
+- path: /home/nils/.kube/
+  allow_binaries: []
+  allow_parent_chains: []
+- path: /home/nils/.gnupg/
+  allow_binaries: []
+  allow_parent_chains: []
 allow_all: false
