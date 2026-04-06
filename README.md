@@ -1,6 +1,7 @@
 # suspicious
 
-> **Warning: Proof of concept.** This tool is experimental and may contain security vulnerabilities despite best efforts. Do not rely on it as your only line of defense. Use at your own risk.
+> [!CAUTION]
+> **.Proof of concept.** This tool is experimental and may contain security vulnerabilities despite best efforts. Do not rely on it as your only line of defense. Use at your own risk.
 
 A Linux file-access monitoring daemon that intercepts file reads in real time using the kernel's **fanotify** API. When a process touches a watched path, an operator is prompted interactively (allow / deny / whitelist) before the kernel returns control to the calling process.
 
