@@ -50,7 +50,7 @@ func runDaemon() {
 
 	cfg, err := loadConfig(configPath)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Fehler beim Laden der Config (%s): %v\n", configPath, err)
+		fmt.Fprintf(os.Stderr, "Failed to load config (%s): %v\n", configPath, err)
 		os.Exit(1)
 	}
 
@@ -67,7 +67,7 @@ func runDaemon() {
 
 	server := NewSocketServer(timeout)
 	if err := server.Start(socketPath); err != nil {
-		fmt.Fprintf(os.Stderr, "Socket konnte nicht gestartet werden (%s): %v\n", socketPath, err)
+		fmt.Fprintf(os.Stderr, "Failed to start socket (%s): %v\n", socketPath, err)
 		os.Exit(1)
 	}
 	defer server.Stop()
@@ -79,7 +79,7 @@ func runDaemon() {
 		unix.O_RDONLY|unix.O_CLOEXEC,
 	)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "fanotify_init fehlgeschlagen: %v\nBraucht root / CAP_SYS_ADMIN.\n", err)
+		fmt.Fprintf(os.Stderr, "fanotify_init failed: %v\nRequires root / CAP_SYS_ADMIN.\n", err)
 		os.Exit(1)
 	}
 	defer unix.Close(fd)
@@ -88,7 +88,7 @@ func runDaemon() {
 	for _, pc := range cfg.Paths {
 		info, err := os.Stat(pc.Path)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "%sWarnung:%s %s nicht gefunden, wird übersprungen: %v\n", colorYellow, colorReset, pc.Path, err)
+			fmt.Fprintf(os.Stderr, "%sWarning:%s %s not found, skipping: %v\n", colorYellow, colorReset, pc.Path, err)
 			continue
 		}
 
@@ -98,26 +98,26 @@ func runDaemon() {
 		}
 
 		if err := unix.FanotifyMark(fd, unix.FAN_MARK_ADD, mask, unix.AT_FDCWD, pc.Path); err != nil {
-			fmt.Fprintf(os.Stderr, "fanotify_mark fehlgeschlagen für %s: %v\n", pc.Path, err)
+			fmt.Fprintf(os.Stderr, "fanotify_mark failed for %s: %v\n", pc.Path, err)
 			os.Exit(1)
 		}
 
-		fmt.Printf("%s%s[fanotify-guard]%s Überwache: %s%s%s\n", colorBold, colorCyan, colorReset, colorYellow, pc.Path, colorReset)
+		fmt.Printf("%s%s[fanotify-guard]%s Watching: %s%s%s\n", colorBold, colorCyan, colorReset, colorYellow, pc.Path, colorReset)
 		marked++
 	}
 
 	if marked == 0 {
-		fmt.Fprintf(os.Stderr, "Fehler: Kein einziger Pfad konnte überwacht werden.\n")
+		fmt.Fprintf(os.Stderr, "Error: no paths could be watched.\n")
 		os.Exit(1)
 	}
 
 	fmt.Printf("%s%s[fanotify-guard]%s Socket: %s\n", colorBold, colorCyan, colorReset, socketPath)
-	fmt.Printf("%s%s[fanotify-guard]%s Timeout: %s (auto-deny bei keiner Antwort)\n", colorBold, colorCyan, colorReset, timeout)
+	fmt.Printf("%s%s[fanotify-guard]%s Timeout: %s (auto-deny if no response)\n", colorBold, colorCyan, colorReset, timeout)
 
 	pidCache := make(map[pidFileKey]uint32)
 	autoAllow := cfg.AllowAll
 	if autoAllow {
-		fmt.Printf("%s(Log-Modus: alles wird automatisch erlaubt)%s\n", colorCyan, colorReset)
+		fmt.Printf("%s(Log mode: all access automatically allowed)%s\n", colorCyan, colorReset)
 	}
 	fmt.Println()
 
@@ -126,7 +126,7 @@ func runDaemon() {
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
 	go func() {
 		<-sigCh
-		fmt.Printf("\n%s[fanotify-guard]%s Beende...\n", colorCyan, colorReset)
+		fmt.Printf("\n%s[fanotify-guard]%s Shutting down...\n", colorCyan, colorReset)
 		unix.Close(fd)
 		os.Exit(0)
 	}()
@@ -158,32 +158,32 @@ func runDaemon() {
 			eventType := describeEvent(event.Mask)
 
 			// Log the event
-			fmt.Printf("%s%s─── Zugriff erkannt ──── %s%s%s\n", colorBold, colorCyan, colorReset, time.Now().Format("2006-01-02 15:04:05"), colorReset)
-			fmt.Printf("  Datei:   %s%s%s\n", colorYellow, filePath, colorReset)
+			fmt.Printf("%s%s─── Access detected ──── %s%s%s\n", colorBold, colorCyan, colorReset, time.Now().Format("2006-01-02 15:04:05"), colorReset)
+			fmt.Printf("  File:    %s%s%s\n", colorYellow, filePath, colorReset)
 			if len(tree) > 0 {
-				fmt.Printf("  Prozess: %s%s%s (PID %d)\n", colorBold, tree[0].Name, colorReset, tree[0].Pid)
+				fmt.Printf("  Process: %s%s%s (PID %d)\n", colorBold, tree[0].Name, colorReset, tree[0].Pid)
 				fmt.Printf("  Cmd:     %s\n", tree[0].Cmd)
 				if len(tree) > 1 {
 					parts := make([]string, len(tree)-1)
 					for i, p := range tree[1:] {
 						parts[i] = p.Name
 					}
-					fmt.Printf("  Eltern:  %s\n", strings.Join(parts, " ← "))
+					fmt.Printf("  Parents: %s\n", strings.Join(parts, " ← "))
 				}
 			}
-			fmt.Printf("  Aktion:  %s\n", eventType)
+			fmt.Printf("  Action:  %s\n", eventType)
 
 			var response uint32
 			pathCfg := cfg.findPathConfig(filePath)
 			if autoAllow {
 				response = unix.FAN_ALLOW
-				fmt.Printf("  → %sautomatisch erlaubt%s\n\n", colorGreen, colorReset)
+				fmt.Printf("  → %sauto-allowed%s\n\n", colorGreen, colorReset)
 			} else if pathCfg != nil && pathCfg.isBinaryAllowed(resolveProcessExe(event.Pid)) {
 				response = unix.FAN_ALLOW
-				fmt.Printf("  → %serlaubt (whitelisted binary)%s\n\n", colorGreen, colorReset)
+				fmt.Printf("  → %sallowed (whitelisted binary)%s\n\n", colorGreen, colorReset)
 			} else if pathCfg != nil && pathCfg.isParentChainAllowed(tree) {
 				response = unix.FAN_ALLOW
-				fmt.Printf("  → %serlaubt (whitelisted parent chain)%s\n\n", colorGreen, colorReset)
+				fmt.Printf("  → %sallowed (whitelisted parent chain)%s\n\n", colorGreen, colorReset)
 			} else {
 				_, alreadyCached := pidCache[pidFileKey{pid: event.Pid, path: filePath}]
 				promptEvent := PromptEvent{
@@ -199,7 +199,7 @@ func runDaemon() {
 
 					if decision.AutoAllowAll {
 						autoAllow = true
-						fmt.Printf("  → %serlaubt (ab jetzt alles automatisch)%s\n\n", colorYellow, colorReset)
+						fmt.Printf("  → %sallowed (auto-allowing all from now on)%s\n\n", colorYellow, colorReset)
 						return unix.FAN_ALLOW
 					}
 					if decision.WhitelistChain {
@@ -208,21 +208,21 @@ func runDaemon() {
 							chain[i] = p.Name
 						}
 						addChainToWhitelist(cfg, configPath, filePath, chain)
-						fmt.Printf("  → %serlaubt (chain zur Whitelist hinzugefügt)%s\n\n", colorYellow, colorReset)
+						fmt.Printf("  → %sallowed (chain added to whitelist)%s\n\n", colorYellow, colorReset)
 						return unix.FAN_ALLOW
 					}
 					if decision.Allow {
-						fmt.Printf("  → %serlaubt%s\n\n", colorGreen, colorReset)
+						fmt.Printf("  → %sallowed%s\n\n", colorGreen, colorReset)
 						return unix.FAN_ALLOW
 					}
-					fmt.Printf("  → %sblockiert%s\n\n", colorRed, colorReset)
+					fmt.Printf("  → %sdenied%s\n\n", colorRed, colorReset)
 					return unix.FAN_DENY
 				})
 				if alreadyCached {
 					if response == unix.FAN_ALLOW {
-						fmt.Printf("  → %serlaubt (PID %d + Datei bereits bestätigt)%s\n\n", colorGreen, event.Pid, colorReset)
+						fmt.Printf("  → %sallowed (PID %d + file already confirmed)%s\n\n", colorGreen, event.Pid, colorReset)
 					} else {
-						fmt.Printf("  → %sblockiert (PID %d + Datei bereits abgelehnt)%s\n\n", colorRed, event.Pid, colorReset)
+						fmt.Printf("  → %sdenied (PID %d + file already rejected)%s\n\n", colorRed, event.Pid, colorReset)
 					}
 				}
 			}
@@ -276,7 +276,7 @@ func resolveFilePath(fd int32) string {
 	link := fmt.Sprintf("/proc/self/fd/%d", fd)
 	path, err := os.Readlink(link)
 	if err != nil {
-		return fmt.Sprintf("(fd=%d, Pfad nicht auflösbar)", fd)
+		return fmt.Sprintf("(fd=%d, path unresolvable)", fd)
 	}
 	return path
 }
@@ -288,7 +288,7 @@ func addChainToWhitelist(cfg *Config, configPath string, filePath string, chain 
 		fmt.Fprintf(os.Stderr, "  %v\n", err)
 		return
 	}
-	fmt.Printf("  %sChain gespeichert in %s%s\n", colorCyan, configPath, colorReset)
+	fmt.Printf("  %sChain saved to %s%s\n", colorCyan, configPath, colorReset)
 }
 
 func describeEvent(mask uint64) string {

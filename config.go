@@ -102,7 +102,7 @@ func (c *Config) findPathConfig(filePath string) *PathConfig {
 func (c *Config) addParentChain(filePath string, chain ParentChain, configPath string) error {
 	pc := c.findPathConfig(filePath)
 	if pc == nil {
-		return fmt.Errorf("kein Pfad-Eintrag für %s gefunden, chain nicht gespeichert", filePath)
+		return fmt.Errorf("no path entry found for %s, chain not saved", filePath)
 	}
 	pc.AllowParentChains = append(pc.AllowParentChains, chain)
 

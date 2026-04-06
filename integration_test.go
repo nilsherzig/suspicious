@@ -52,8 +52,8 @@ func TestFanotifyDetectsFileAccess(t *testing.T) {
 	if !strings.Contains(output, "secret.txt") {
 		t.Errorf("expected output to mention secret.txt, got:\n%s", output)
 	}
-	if !strings.Contains(output, "Zugriff erkannt") {
-		t.Errorf("expected 'Zugriff erkannt' in output, got:\n%s", output)
+	if !strings.Contains(output, "Access detected") {
+		t.Errorf("expected 'Access detected' in output, got:\n%s", output)
 	}
 }
 
@@ -131,8 +131,8 @@ func TestFanotifyBlocksAccess(t *testing.T) {
 	time.Sleep(100 * time.Millisecond)
 
 	output := out.String()
-	if !strings.Contains(output, "blockiert") {
-		t.Errorf("expected 'blockiert' in output, got:\n%s", output)
+	if !strings.Contains(output, "denied") {
+		t.Errorf("expected 'denied' in output, got:\n%s", output)
 	}
 	if openErr == nil {
 		t.Error("expected open to fail due to FAN_DENY, but it succeeded")
@@ -167,9 +167,9 @@ func TestFanotifyAllowsViaAttachCLI(t *testing.T) {
 	// Wait for daemon + socket
 	time.Sleep(400 * time.Millisecond)
 
-	// Start CLI, pipe "j\n" (allow)
+	// Start CLI, pipe "y\n" (allow)
 	cliCmd := exec.Command(bin, "attach", socketPath)
-	cliCmd.Stdin = strings.NewReader("j\n")
+	cliCmd.Stdin = strings.NewReader("y\n")
 	cliOut, _ := startAndCapture(t, cliCmd)
 
 	time.Sleep(100 * time.Millisecond)

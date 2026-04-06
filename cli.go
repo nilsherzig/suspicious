@@ -13,13 +13,13 @@ import (
 func runAttach(socketPath string) {
 	conn, err := net.Dial("unix", socketPath)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Verbindung zum Daemon fehlgeschlagen (%s): %v\n", socketPath, err)
-		fmt.Fprintf(os.Stderr, "Läuft der Daemon? Starte ihn mit: sudo suspicious [config.yaml]\n")
+		fmt.Fprintf(os.Stderr, "Failed to connect to daemon (%s): %v\n", socketPath, err)
+		fmt.Fprintf(os.Stderr, "Is the daemon running? Start it with: sudo suspicious [config.yaml]\n")
 		os.Exit(1)
 	}
 	defer conn.Close()
 
-	fmt.Printf("%s%s[suspicious-cli]%s Verbunden mit %s\n\n", colorBold, colorCyan, colorReset, socketPath)
+	fmt.Printf("%s%s[suspicious-cli]%s Connected to %s\n\n", colorBold, colorCyan, colorReset, socketPath)
 
 	enc := json.NewEncoder(conn)
 	dec := json.NewDecoder(conn)
@@ -55,7 +55,7 @@ func runAttach(socketPath string) {
 			select {
 			case env, ok := <-incoming:
 				if !ok {
-					fmt.Printf("\n%s[suspicious-cli]%s Daemon-Verbindung getrennt.\n", colorCyan, colorReset)
+					fmt.Printf("\n%s[suspicious-cli]%s Daemon connection closed.\n", colorCyan, colorReset)
 					return
 				}
 				switch env.Type {
@@ -82,7 +82,7 @@ func runAttach(socketPath string) {
 			// Block waiting for the next envelope
 			env, ok := <-incoming
 			if !ok {
-				fmt.Printf("\n%s[suspicious-cli]%s Daemon-Verbindung getrennt.\n", colorCyan, colorReset)
+				fmt.Printf("\n%s[suspicious-cli]%s Daemon connection closed.\n", colorCyan, colorReset)
 				return
 			}
 			switch env.Type {
@@ -109,7 +109,7 @@ func runAttach(socketPath string) {
 
 		// Check if already decided while we were looking
 		fmt.Print(formatPromptEvent(pe.event))
-		fmt.Printf("  Erlauben? [%sJ%s/n/%sw%s=chain whitelist]: ", colorGreen, colorReset, colorYellow, colorReset)
+		fmt.Printf("  Allow? [%sY%s/n/%sw%s=chain whitelist]: ", colorGreen, colorReset, colorYellow, colorReset)
 
 		// Non-blocking check: did daemon decide this while we were printing?
 		select {
@@ -123,7 +123,7 @@ func runAttach(socketPath string) {
 				if env.Decided.ID == id {
 					// This prompt was decided by another client
 					delete(pending, id)
-					fmt.Printf("\n  → %sbereits entschieden von anderem Client%s\n\n", colorYellow, colorReset)
+					fmt.Printf("\n  → %salready decided by another client%s\n\n", colorYellow, colorReset)
 					continue
 				}
 				if p, ok := pending[env.Decided.ID]; ok {
@@ -138,17 +138,17 @@ func runAttach(socketPath string) {
 		delete(pending, id)
 
 		if err := enc.Encode(resp); err != nil {
-			fmt.Fprintf(os.Stderr, "Fehler beim Senden der Entscheidung: %v\n", err)
+			fmt.Fprintf(os.Stderr, "Failed to send decision: %v\n", err)
 			return
 		}
 
 		switch {
 		case resp.WhitelistChain:
-			fmt.Printf("  → %sErlaubt + Elternkette zur Whitelist hinzugefügt%s\n\n", colorGreen, colorReset)
+			fmt.Printf("  → %sAllowed + parent chain added to whitelist%s\n\n", colorGreen, colorReset)
 		case resp.Allow:
-			fmt.Printf("  → %sErlaubt%s\n\n", colorGreen, colorReset)
+			fmt.Printf("  → %sAllowed%s\n\n", colorGreen, colorReset)
 		default:
-			fmt.Printf("  → %sAbgelehnt%s\n\n", colorRed, colorReset)
+			fmt.Printf("  → %sDenied%s\n\n", colorRed, colorReset)
 		}
 	}
 }
@@ -158,12 +158,12 @@ func parseDecisionInput(input string, event PromptEvent) DecisionResponse {
 	normalized := strings.ToLower(strings.TrimSpace(input))
 	resp := DecisionResponse{ID: event.ID}
 	switch normalized {
-	case "n", "nein", "no":
+	case "n", "no":
 		resp.Allow = false
 	case "w":
 		resp.Allow = true
 		resp.WhitelistChain = true
-	default: // j, y, ja, yes, ""
+	default: // y, yes, ""
 		resp.Allow = true
 	}
 	return resp
@@ -172,21 +172,21 @@ func parseDecisionInput(input string, event PromptEvent) DecisionResponse {
 // formatPromptEvent renders a prompt event as an ANSI-colored string for display.
 func formatPromptEvent(event PromptEvent) string {
 	var sb strings.Builder
-	sb.WriteString(fmt.Sprintf("%s%s─── Zugriff erkannt ──── %s%s%s\n",
+	sb.WriteString(fmt.Sprintf("%s%s─── Access detected ──── %s%s%s\n",
 		colorBold, colorCyan, colorReset, event.Timestamp.Format("2006-01-02 15:04:05"), colorReset))
-	sb.WriteString(fmt.Sprintf("  Datei:   %s%s%s\n", colorYellow, event.Path, colorReset))
+	sb.WriteString(fmt.Sprintf("  File:    %s%s%s\n", colorYellow, event.Path, colorReset))
 	if len(event.ProcessTree) > 0 {
 		p0 := event.ProcessTree[0]
-		sb.WriteString(fmt.Sprintf("  Prozess: %s%s%s (PID %d)\n", colorBold, p0.Name, colorReset, p0.Pid))
+		sb.WriteString(fmt.Sprintf("  Process: %s%s%s (PID %d)\n", colorBold, p0.Name, colorReset, p0.Pid))
 		sb.WriteString(fmt.Sprintf("  Cmd:     %s\n", p0.Cmd))
 		if len(event.ProcessTree) > 1 {
 			parts := make([]string, len(event.ProcessTree)-1)
 			for i, p := range event.ProcessTree[1:] {
 				parts[i] = p.Name
 			}
-			sb.WriteString(fmt.Sprintf("  Eltern:  %s\n", strings.Join(parts, " ← ")))
+			sb.WriteString(fmt.Sprintf("  Parents: %s\n", strings.Join(parts, " ← ")))
 		}
 	}
-	sb.WriteString(fmt.Sprintf("  Aktion:  %s\n", event.Action))
+	sb.WriteString(fmt.Sprintf("  Action:  %s\n", event.Action))
 	return sb.String()
 }

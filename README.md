@@ -1,15 +1,17 @@
 # suspicious
 
+> **Warning: Proof of concept.** This tool is experimental and may contain security vulnerabilities despite best efforts. Do not rely on it as your only line of defense. Use at your own risk.
+
 A Linux file-access monitoring daemon that intercepts file reads in real time using the kernel's **fanotify** API. When a process touches a watched path, an operator is prompted interactively (allow / deny / whitelist) before the kernel returns control to the calling process.
 
 ```
-─── Zugriff erkannt ──── 2026-04-06 14:32:01
-  Datei:   /home/user/.ssh/id_ed25519
-  Prozess: cat (PID 12345)
+─── Access detected ──── 2026-04-06 14:32:01
+  File:    /home/user/.ssh/id_ed25519
+  Process: cat (PID 12345)
   Cmd:     cat /home/user/.ssh/id_ed25519
-  Eltern:  zsh ← ghostty ← systemd
-  Aktion:  OPEN
-  Erlauben? [J/n/a/w=chain whitelist]:
+  Parents: zsh ← ghostty ← systemd
+  Action:  OPEN
+  Allow? [Y/n/w=chain whitelist]:
 ```
 
 ## How it works
@@ -135,9 +137,8 @@ When you press **`w`** in the CLI, the current process's full parent chain is ap
 
 | Key | Action |
 |---|---|
-| `j` / `y` / Enter | Allow this access |
+| `y` / Enter | Allow this access |
 | `n` | Deny this access |
-| `a` | Allow all future accesses for this session (log-only mode) |
 | `w` | Allow and save parent chain to whitelist |
 
 ## Decision caching

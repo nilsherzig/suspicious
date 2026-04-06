@@ -23,7 +23,7 @@ func TestParseDecisionInput_Allow(t *testing.T) {
 
 func TestParseDecisionInput_Deny(t *testing.T) {
 	cases := []struct{ input string }{
-		{"n"}, {"nein"}, {"no"}, {"N"},
+		{"n"}, {"no"}, {"N"},
 	}
 	event := PromptEvent{ID: "x"}
 	for _, tc := range cases {
@@ -63,7 +63,7 @@ func TestParseDecisionInput_WhitelistChain(t *testing.T) {
 
 func TestParseDecisionInput_PreservesID(t *testing.T) {
 	event := PromptEvent{ID: "abc123"}
-	resp := parseDecisionInput("j", event)
+	resp := parseDecisionInput("y", event)
 	if resp.ID != "abc123" {
 		t.Errorf("ID not preserved: got %q", resp.ID)
 	}
