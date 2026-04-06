@@ -74,7 +74,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	pidCache := make(map[int32]uint32)
+	pidCache := make(map[pidFileKey]uint32)
 	autoAllow := cfg.AllowAll
 	if autoAllow {
 		fmt.Printf("%s(Log-Modus: alles wird automatisch erlaubt)%s\n", colorCyan, colorReset)
@@ -147,8 +147,8 @@ func main() {
 				response = unix.FAN_ALLOW
 				fmt.Printf("  → %sautomatisch erlaubt%s\n\n", colorGreen, colorReset)
 			} else {
-				_, alreadyCached := pidCache[event.Pid]
-				response = resolveDecision(event.Pid, pidCache, func() uint32 {
+				_, alreadyCached := pidCache[pidFileKey{pid: event.Pid, path: filePath}]
+				response = resolveDecision(event.Pid, filePath, pidCache, func() uint32 {
 					fmt.Printf("  Erlauben? [%sJ%s/n/a]: ", colorGreen, colorReset)
 					input, _ := reader.ReadString('\n')
 					input = strings.TrimSpace(strings.ToLower(input))
@@ -168,9 +168,9 @@ func main() {
 				})
 				if alreadyCached {
 					if response == unix.FAN_ALLOW {
-						fmt.Printf("  → %serlaubt (PID %d bereits bestätigt)%s\n\n", colorGreen, event.Pid, colorReset)
+						fmt.Printf("  → %serlaubt (PID %d + Datei bereits bestätigt)%s\n\n", colorGreen, event.Pid, colorReset)
 					} else {
-						fmt.Printf("  → %sblockiert (PID %d bereits abgelehnt)%s\n\n", colorRed, event.Pid, colorReset)
+						fmt.Printf("  → %sblockiert (PID %d + Datei bereits abgelehnt)%s\n\n", colorRed, event.Pid, colorReset)
 					}
 				}
 			}
@@ -194,14 +194,20 @@ func main() {
 	}
 }
 
-// resolveDecision returns a cached allow/deny for pid if already decided,
+type pidFileKey struct {
+	pid  int32
+	path string
+}
+
+// resolveDecision returns a cached allow/deny for the (pid, path) pair if already decided,
 // otherwise calls prompt() to get the user's decision and stores it.
-func resolveDecision(pid int32, cache map[int32]uint32, prompt func() uint32) uint32 {
-	if response, ok := cache[pid]; ok {
+func resolveDecision(pid int32, path string, cache map[pidFileKey]uint32, prompt func() uint32) uint32 {
+	key := pidFileKey{pid: pid, path: path}
+	if response, ok := cache[key]; ok {
 		return response
 	}
 	response := prompt()
-	cache[pid] = response
+	cache[key] = response
 	return response
 }
 
