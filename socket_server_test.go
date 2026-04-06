@@ -221,6 +221,74 @@ func TestSocketServer_ClientDisconnect_DoesNotPanic(t *testing.T) {
 	}
 }
 
+func TestSocketServer_BroadcastPrompt_NoTimeoutWhenClientAttached(t *testing.T) {
+	timeout := 50 * time.Millisecond
+	srv := NewSocketServer(timeout)
+	path := tempSocketPath(t)
+	srv.Start(path)
+	defer srv.Stop()
+
+	conn, _ := net.Dial("unix", path)
+	defer conn.Close()
+	dec := json.NewDecoder(conn)
+	enc := json.NewEncoder(conn)
+	time.Sleep(20 * time.Millisecond)
+
+	event := PromptEvent{ID: "no-timeout", Path: "/tmp/test", Action: "OPEN"}
+	var result DecisionResponse
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		result = srv.BroadcastPrompt(event)
+	}()
+
+	var env Envelope
+	dec.Decode(&env)
+
+	// Respond well after the timeout duration — should NOT auto-deny
+	time.Sleep(timeout * 4)
+	enc.Encode(DecisionResponse{ID: "no-timeout", Allow: true})
+	wg.Wait()
+
+	if !result.Allow {
+		t.Error("expected allow: client was attached and answered; timeout should not fire while a client is connected")
+	}
+}
+
+func TestSocketServer_LastClientDisconnect_StartsTimeout(t *testing.T) {
+	timeout := 80 * time.Millisecond
+	srv := NewSocketServer(timeout)
+	path := tempSocketPath(t)
+	srv.Start(path)
+	defer srv.Stop()
+
+	conn, _ := net.Dial("unix", path)
+	dec := json.NewDecoder(conn)
+	time.Sleep(20 * time.Millisecond)
+
+	event := PromptEvent{ID: "disconnect-timeout", Path: "/tmp/x", Action: "OPEN"}
+	var result DecisionResponse
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		result = srv.BroadcastPrompt(event)
+	}()
+
+	var env Envelope
+	dec.Decode(&env)
+
+	// Disconnect without answering — timeout should now kick in
+	conn.Close()
+
+	wg.Wait()
+
+	if result.Allow {
+		t.Error("expected deny: last client disconnected without answering")
+	}
+}
+
 func TestSocketServer_SocketFileCreated(t *testing.T) {
 	srv := NewSocketServer(time.Second)
 	path := tempSocketPath(t)

@@ -109,7 +109,7 @@ func runAttach(socketPath string) {
 
 		// Check if already decided while we were looking
 		fmt.Print(formatPromptEvent(pe.event))
-		fmt.Printf("  Erlauben? [%sJ%s/n/a/%sw%s=chain whitelist]: ", colorGreen, colorReset, colorYellow, colorReset)
+		fmt.Printf("  Erlauben? [%sJ%s/n/%sw%s=chain whitelist]: ", colorGreen, colorReset, colorYellow, colorReset)
 
 		// Non-blocking check: did daemon decide this while we were printing?
 		select {
@@ -145,8 +145,6 @@ func runAttach(socketPath string) {
 		switch {
 		case resp.WhitelistChain:
 			fmt.Printf("  → %sErlaubt + Elternkette zur Whitelist hinzugefügt%s\n\n", colorGreen, colorReset)
-		case resp.AutoAllowAll:
-			fmt.Printf("  → %sAlle weiteren Zugriffe erlaubt (Log-Modus)%s\n\n", colorYellow, colorReset)
 		case resp.Allow:
 			fmt.Printf("  → %sErlaubt%s\n\n", colorGreen, colorReset)
 		default:
@@ -160,9 +158,6 @@ func parseDecisionInput(input string, event PromptEvent) DecisionResponse {
 	normalized := strings.ToLower(strings.TrimSpace(input))
 	resp := DecisionResponse{ID: event.ID}
 	switch normalized {
-	case "a", "all", "alle":
-		resp.Allow = true
-		resp.AutoAllowAll = true
 	case "n", "nein", "no":
 		resp.Allow = false
 	case "w":

@@ -70,7 +70,9 @@ func (s *SocketServer) Stop() {
 }
 
 // BroadcastPrompt sends event to all connected clients and blocks until one
-// responds or the timeout elapses (in which case deny is returned).
+// responds. If no clients are connected the timeout applies immediately. If
+// clients are connected the timeout is deferred until the last client
+// disconnects (see removeClient).
 func (s *SocketServer) BroadcastPrompt(event PromptEvent) DecisionResponse {
 	ch := make(chan DecisionResponse, 1)
 	pp := &pendingPrompt{event: event, decided: ch}
@@ -78,11 +80,19 @@ func (s *SocketServer) BroadcastPrompt(event PromptEvent) DecisionResponse {
 
 	s.mu.Lock()
 	s.pending[event.ID] = pp
+	hasClients := len(s.clients) > 0
 	for _, c := range s.clients {
 		c.enc.Encode(env) // best-effort; ignore per-client errors
 	}
 	s.mu.Unlock()
 
+	if hasClients {
+		// At least one client is attached — wait indefinitely.
+		// removeClient starts the timeout when the last client drops.
+		return <-ch
+	}
+
+	// No clients: auto-deny after timeout.
 	select {
 	case resp := <-ch:
 		return resp
@@ -147,12 +157,35 @@ func (s *SocketServer) readLoop(c *socketClient) {
 func (s *SocketServer) removeClient(c *socketClient) {
 	c.conn.Close()
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	for i, cl := range s.clients {
 		if cl == c {
 			s.clients = append(s.clients[:i], s.clients[i+1:]...)
-			return
+			break
 		}
+	}
+	// When the last client drops, start a timeout for every pending prompt so
+	// that BroadcastPrompt (which is blocking on <-ch without a timer) doesn't
+	// wait forever.
+	var toTimeout []*pendingPrompt
+	if len(s.clients) == 0 {
+		for _, pp := range s.pending {
+			toTimeout = append(toTimeout, pp)
+		}
+	}
+	s.mu.Unlock()
+
+	for _, pp := range toTimeout {
+		pp := pp
+		go func() {
+			time.Sleep(s.timeout)
+			select {
+			case pp.decided <- DecisionResponse{ID: pp.event.ID, Allow: false}:
+				s.mu.Lock()
+				delete(s.pending, pp.event.ID)
+				s.mu.Unlock()
+			default: // already answered (e.g. a new client connected and responded)
+			}
+		}()
 	}
 }
 

@@ -7,7 +7,7 @@ import (
 
 func TestParseDecisionInput_Allow(t *testing.T) {
 	cases := []struct{ input string }{
-		{"j"}, {"ja"}, {"y"}, {"yes"}, {"J"}, {"JA"}, {""},
+		{"y"}, {"yes"}, {"Y"}, {"YES"}, {""},
 	}
 	event := PromptEvent{ID: "x"}
 	for _, tc := range cases {
@@ -34,7 +34,7 @@ func TestParseDecisionInput_Deny(t *testing.T) {
 	}
 }
 
-func TestParseDecisionInput_AutoAllowAll(t *testing.T) {
+func TestParseDecisionInput_AutoAllowAll_InputsFallThrough(t *testing.T) {
 	cases := []struct{ input string }{
 		{"a"}, {"all"}, {"alle"}, {"A"},
 	}
@@ -42,10 +42,10 @@ func TestParseDecisionInput_AutoAllowAll(t *testing.T) {
 	for _, tc := range cases {
 		resp := parseDecisionInput(tc.input, event)
 		if !resp.Allow {
-			t.Errorf("input %q: expected allow", tc.input)
+			t.Errorf("input %q: expected allow (default)", tc.input)
 		}
-		if !resp.AutoAllowAll {
-			t.Errorf("input %q: expected AutoAllowAll=true", tc.input)
+		if resp.AutoAllowAll {
+			t.Errorf("input %q: expected AutoAllowAll=false after removal", tc.input)
 		}
 	}
 }
