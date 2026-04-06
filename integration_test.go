@@ -28,12 +28,14 @@ func TestFanotifyDetectsFileAccess(t *testing.T) {
 	}
 
 	cfgPath := writeTempConfig(t, []string{dir}, true)
+	socketPath := filepath.Join(t.TempDir(), "test.sock")
 
 	cmd := exec.Command(suspiciousBinary(t), cfgPath)
-	out, err := startAndCapture(t, cmd)
+	cmd.Env = append(os.Environ(), "SUSPICIOUS_SOCKET="+socketPath)
+	out, _ := startAndCapture(t, cmd)
 
-	// Give the process time to initialize fanotify
-	time.Sleep(300 * time.Millisecond)
+	// Give the daemon time to initialize fanotify and create the socket
+	time.Sleep(400 * time.Millisecond)
 
 	// Trigger an access
 	f, err := os.Open(targetFile)
@@ -69,12 +71,13 @@ func TestFanotifyDetectsDirectoryAccess(t *testing.T) {
 	}
 
 	cfgPath := writeTempConfig(t, []string{dir}, true)
+	socketPath := filepath.Join(t.TempDir(), "test.sock")
 
 	cmd := exec.Command(suspiciousBinary(t), cfgPath)
-	out, err := startAndCapture(t, cmd)
-	_ = err
+	cmd.Env = append(os.Environ(), "SUSPICIOUS_SOCKET="+socketPath)
+	out, _ := startAndCapture(t, cmd)
 
-	time.Sleep(300 * time.Millisecond)
+	time.Sleep(400 * time.Millisecond)
 
 	f, openErr := os.Open(fileInSubdir)
 	if openErr != nil {
@@ -105,18 +108,25 @@ func TestFanotifyBlocksAccess(t *testing.T) {
 	}
 
 	cfgPath := writeTempConfig(t, []string{dir}, false)
+	socketPath := filepath.Join(t.TempDir(), "test.sock")
 
-	// Pipe "n\n" to stdin so every access is denied
-	cmd := exec.Command(suspiciousBinary(t), cfgPath)
-	cmd.Stdin = strings.NewReader("n\n")
+	// Use a very short timeout so the daemon auto-denies without needing a CLI
+	daemonEnv := append(os.Environ(),
+		"SUSPICIOUS_SOCKET="+socketPath,
+		"SUSPICIOUS_TIMEOUT=100ms",
+	)
+
+	bin := suspiciousBinary(t)
+	cmd := exec.Command(bin, cfgPath)
+	cmd.Env = daemonEnv
 	out, _ := startAndCapture(t, cmd)
 
-	time.Sleep(300 * time.Millisecond)
+	time.Sleep(400 * time.Millisecond)
 
-	// This open should be blocked (FAN_DENY)
+	// This open should be blocked (FAN_DENY via auto-deny timeout)
 	_, openErr := os.Open(targetFile)
 
-	time.Sleep(200 * time.Millisecond)
+	time.Sleep(300 * time.Millisecond)
 	cmd.Process.Signal(os.Interrupt)
 	time.Sleep(100 * time.Millisecond)
 
@@ -126,6 +136,58 @@ func TestFanotifyBlocksAccess(t *testing.T) {
 	}
 	if openErr == nil {
 		t.Error("expected open to fail due to FAN_DENY, but it succeeded")
+	}
+}
+
+func TestFanotifyAllowsViaAttachCLI(t *testing.T) {
+	dir := filepath.Join("testfiles", "allow_via_cli")
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.RemoveAll(dir) })
+
+	targetFile := filepath.Join(dir, "guarded.txt")
+	if err := os.WriteFile(targetFile, []byte("content"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	cfgPath := writeTempConfig(t, []string{dir}, false)
+	socketPath := filepath.Join(t.TempDir(), "test.sock")
+
+	bin := suspiciousBinary(t)
+	daemonEnv := append(os.Environ(),
+		"SUSPICIOUS_SOCKET="+socketPath,
+		"SUSPICIOUS_TIMEOUT=5s",
+	)
+
+	daemonCmd := exec.Command(bin, cfgPath)
+	daemonCmd.Env = daemonEnv
+	daemonOut, _ := startAndCapture(t, daemonCmd)
+
+	// Wait for daemon + socket
+	time.Sleep(400 * time.Millisecond)
+
+	// Start CLI, pipe "j\n" (allow)
+	cliCmd := exec.Command(bin, "attach", socketPath)
+	cliCmd.Stdin = strings.NewReader("j\n")
+	cliOut, _ := startAndCapture(t, cliCmd)
+
+	time.Sleep(100 * time.Millisecond)
+
+	// Trigger access — CLI should allow it
+	f, openErr := os.Open(targetFile)
+	if openErr == nil {
+		f.Close()
+	}
+
+	time.Sleep(300 * time.Millisecond)
+	daemonCmd.Process.Signal(os.Interrupt)
+	cliCmd.Process.Signal(os.Interrupt)
+	time.Sleep(100 * time.Millisecond)
+
+	if openErr != nil {
+		t.Errorf("expected open to succeed (CLI allowed), got: %v\nDaemon output:\n%s\nCLI output:\n%s",
+			openErr, daemonOut.String(), cliOut.String())
 	}
 }
 

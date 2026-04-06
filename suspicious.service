@@ -1,0 +1,38 @@
+[Unit]
+Description=suspicious - fanotify file access monitor
+Documentation=https://github.com/nilsherzig/suspicious
+After=local-fs.target
+
+[Service]
+Type=simple
+# Dedicated service user; create with: useradd -r -s /sbin/nologin suspicious
+# Add users who need 'suspicious attach' to the 'suspicious' group.
+User=suspicious
+Group=suspicious
+
+# CAP_SYS_ADMIN is required for fanotify_init with FAN_CLASS_CONTENT.
+# No other root privileges are needed.
+AmbientCapabilities=CAP_SYS_ADMIN
+CapabilityBoundingSet=CAP_SYS_ADMIN
+
+# /run/suspicious/ is created automatically by systemd, owned by the service
+# user, and removed on stop. The Unix socket lives here.
+RuntimeDirectory=suspicious
+RuntimeDirectoryMode=0750
+
+ExecStart=/usr/local/bin/suspicious /etc/suspicious/config.yaml
+
+# Harden the service
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=read-only
+PrivateTmp=yes
+RestrictAddressFamilies=AF_UNIX
+RestrictNamespaces=yes
+SystemCallFilter=@system-service
+
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

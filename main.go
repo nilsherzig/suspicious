@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bufio"
 	"fmt"
 	"os"
 	"os/signal"
@@ -23,7 +22,27 @@ const (
 	colorBold   = "\033[1m"
 )
 
+const defaultSocketPath = "/run/suspicious/events.sock"
+const defaultTimeout = 5 * time.Second
+
 func main() {
+	// Subcommand dispatch
+	if len(os.Args) > 1 && os.Args[1] == "attach" {
+		socketPath := defaultSocketPath
+		if v := os.Getenv("SUSPICIOUS_SOCKET"); v != "" {
+			socketPath = v
+		}
+		if len(os.Args) > 2 {
+			socketPath = os.Args[2]
+		}
+		runAttach(socketPath)
+		return
+	}
+
+	runDaemon()
+}
+
+func runDaemon() {
 	configPath := "config.yaml"
 	if len(os.Args) > 1 {
 		configPath = os.Args[1]
@@ -34,6 +53,24 @@ func main() {
 		fmt.Fprintf(os.Stderr, "Fehler beim Laden der Config (%s): %v\n", configPath, err)
 		os.Exit(1)
 	}
+
+	socketPath := defaultSocketPath
+	if v := os.Getenv("SUSPICIOUS_SOCKET"); v != "" {
+		socketPath = v
+	}
+	timeout := defaultTimeout
+	if v := os.Getenv("SUSPICIOUS_TIMEOUT"); v != "" {
+		if d, err := time.ParseDuration(v); err == nil {
+			timeout = d
+		}
+	}
+
+	server := NewSocketServer(timeout)
+	if err := server.Start(socketPath); err != nil {
+		fmt.Fprintf(os.Stderr, "Socket konnte nicht gestartet werden (%s): %v\n", socketPath, err)
+		os.Exit(1)
+	}
+	defer server.Stop()
 
 	// FAN_CLASS_CONTENT is required for permission events
 	// FAN_UNLIMITED_QUEUE prevents event drops under load
@@ -74,13 +111,13 @@ func main() {
 		os.Exit(1)
 	}
 
+	fmt.Printf("%s%s[fanotify-guard]%s Socket: %s\n", colorBold, colorCyan, colorReset, socketPath)
+	fmt.Printf("%s%s[fanotify-guard]%s Timeout: %s (auto-deny bei keiner Antwort)\n", colorBold, colorCyan, colorReset, timeout)
+
 	pidCache := make(map[pidFileKey]uint32)
 	autoAllow := cfg.AllowAll
 	if autoAllow {
 		fmt.Printf("%s(Log-Modus: alles wird automatisch erlaubt)%s\n", colorCyan, colorReset)
-	} else {
-		fmt.Printf("Beantworte Zugriffe mit: %s[j]a%s / %s[n]ein%s / %s[a]lle erlauben%s\n",
-			colorGreen, colorReset, colorRed, colorReset, colorYellow, colorReset)
 	}
 	fmt.Println()
 
@@ -94,7 +131,6 @@ func main() {
 		os.Exit(0)
 	}()
 
-	reader := bufio.NewReader(os.Stdin)
 	eventSize := int(unsafe.Sizeof(unix.FanotifyEventMetadata{}))
 	buf := make([]byte, 4096)
 
@@ -117,27 +153,22 @@ func main() {
 				continue
 			}
 
-			// Resolve the file path from the fd
 			filePath := resolveFilePath(event.Fd)
-
-			// Resolve process tree from PID
 			tree := resolveProcessTree(event.Pid)
-
-			// Determine event type
 			eventType := describeEvent(event.Mask)
 
-			// Print the event info
+			// Log the event
 			fmt.Printf("%s%s─── Zugriff erkannt ──── %s%s%s\n", colorBold, colorCyan, colorReset, time.Now().Format("2006-01-02 15:04:05"), colorReset)
 			fmt.Printf("  Datei:   %s%s%s\n", colorYellow, filePath, colorReset)
 			if len(tree) > 0 {
 				fmt.Printf("  Prozess: %s%s%s (PID %d)\n", colorBold, tree[0].Name, colorReset, tree[0].Pid)
 				fmt.Printf("  Cmd:     %s\n", tree[0].Cmd)
 				if len(tree) > 1 {
-					parts := make([]string, len(tree))
-					for i, p := range tree {
+					parts := make([]string, len(tree)-1)
+					for i, p := range tree[1:] {
 						parts[i] = p.Name
 					}
-					fmt.Printf("  Eltern:  %s\n", strings.Join(parts[1:], " ← "))
+					fmt.Printf("  Eltern:  %s\n", strings.Join(parts, " ← "))
 				}
 			}
 			fmt.Printf("  Aktion:  %s\n", eventType)
@@ -155,20 +186,23 @@ func main() {
 				fmt.Printf("  → %serlaubt (whitelisted parent chain)%s\n\n", colorGreen, colorReset)
 			} else {
 				_, alreadyCached := pidCache[pidFileKey{pid: event.Pid, path: filePath}]
+				promptEvent := PromptEvent{
+					ID:          generatePromptID(),
+					Pid:         event.Pid,
+					Path:        filePath,
+					ProcessTree: tree,
+					Action:      eventType,
+					Timestamp:   time.Now(),
+				}
 				response = resolveDecision(event.Pid, filePath, pidCache, func() uint32 {
-					fmt.Printf("  Erlauben? [%sJ%s/n/a/%sw%s=chain whitelist]: ", colorGreen, colorReset, colorYellow, colorReset)
-					input, _ := reader.ReadString('\n')
-					input = strings.TrimSpace(strings.ToLower(input))
+					decision := server.BroadcastPrompt(promptEvent)
 
-					switch input {
-					case "a", "all", "alle":
+					if decision.AutoAllowAll {
 						autoAllow = true
 						fmt.Printf("  → %serlaubt (ab jetzt alles automatisch)%s\n\n", colorYellow, colorReset)
 						return unix.FAN_ALLOW
-					case "n", "nein", "no":
-						fmt.Printf("  → %sblockiert%s\n\n", colorRed, colorReset)
-						return unix.FAN_DENY
-					case "w":
+					}
+					if decision.WhitelistChain {
 						chain := make(ParentChain, len(tree))
 						for i, p := range tree {
 							chain[i] = p.Name
@@ -176,10 +210,13 @@ func main() {
 						addChainToWhitelist(cfg, configPath, filePath, chain)
 						fmt.Printf("  → %serlaubt (chain zur Whitelist hinzugefügt)%s\n\n", colorYellow, colorReset)
 						return unix.FAN_ALLOW
-					default: // j, y, ja, yes, ""
+					}
+					if decision.Allow {
 						fmt.Printf("  → %serlaubt%s\n\n", colorGreen, colorReset)
 						return unix.FAN_ALLOW
 					}
+					fmt.Printf("  → %sblockiert%s\n\n", colorRed, colorReset)
+					return unix.FAN_DENY
 				})
 				if alreadyCached {
 					if response == unix.FAN_ALLOW {
@@ -190,20 +227,16 @@ func main() {
 				}
 			}
 
-			// Send the response back to the kernel
 			resp := unix.FanotifyResponse{
 				Fd:       event.Fd,
 				Response: response,
 			}
 			respBytes := (*[unsafe.Sizeof(resp)]byte)(unsafe.Pointer(&resp))
-			err := writeFanotifyResponse(fd, respBytes[:])
-			if err != nil {
+			if err := writeFanotifyResponse(fd, respBytes[:]); err != nil {
 				fmt.Fprintf(os.Stderr, "response write error: %v\n", err)
 			}
 
-			// Close the event fd
 			unix.Close(int(event.Fd))
-
 			offset += int(event.Event_len)
 		}
 	}
@@ -247,7 +280,6 @@ func resolveFilePath(fd int32) string {
 	}
 	return path
 }
-
 
 // addChainToWhitelist appends chain to the allow_parent_chains of the PathConfig
 // matching filePath, then persists the updated config to disk.

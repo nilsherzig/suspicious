@@ -9,9 +9,9 @@ import (
 )
 
 type ProcessInfo struct {
-	Pid  int32
-	Name string
-	Cmd  string
+	Pid  int32  `json:"pid"`
+	Name string `json:"name"`
+	Cmd  string `json:"cmd"`
 }
 
 func resolveProcess(pid int32) (name string, cmdline string) {
