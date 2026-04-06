@@ -1,8 +1,10 @@
 paths:
   - /tmp/suspicious-watch # does not exist
-  # - /home/user/documents
-  # - /etc/secrets
-  - $HOME/.ssh # remember this will monitor root's .ssh since the script runs as root
+  # Einfacher Pfad (wie bisher):
   - /home/nils/.ssh
+  # Pfad als Objekt mit Binary-Whitelist:
+  - path: /home/nils/dotfiles/nvim
+    allow_binaries:
+      - /etc/profiles/per-user/nils/bin/nvim
 
 allow_all: false

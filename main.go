@@ -48,10 +48,10 @@ func main() {
 	defer unix.Close(fd)
 
 	marked := 0
-	for _, watchPath := range cfg.Paths {
-		info, err := os.Stat(watchPath)
+	for _, pc := range cfg.Paths {
+		info, err := os.Stat(pc.Path)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "%sWarnung:%s %s nicht gefunden, wird übersprungen: %v\n", colorYellow, colorReset, watchPath, err)
+			fmt.Fprintf(os.Stderr, "%sWarnung:%s %s nicht gefunden, wird übersprungen: %v\n", colorYellow, colorReset, pc.Path, err)
 			continue
 		}
 
@@ -60,12 +60,12 @@ func main() {
 			mask |= unix.FAN_EVENT_ON_CHILD
 		}
 
-		if err := unix.FanotifyMark(fd, unix.FAN_MARK_ADD, mask, unix.AT_FDCWD, watchPath); err != nil {
-			fmt.Fprintf(os.Stderr, "fanotify_mark fehlgeschlagen für %s: %v\n", watchPath, err)
+		if err := unix.FanotifyMark(fd, unix.FAN_MARK_ADD, mask, unix.AT_FDCWD, pc.Path); err != nil {
+			fmt.Fprintf(os.Stderr, "fanotify_mark fehlgeschlagen für %s: %v\n", pc.Path, err)
 			os.Exit(1)
 		}
 
-		fmt.Printf("%s%s[fanotify-guard]%s Überwache: %s%s%s\n", colorBold, colorCyan, colorReset, colorYellow, watchPath, colorReset)
+		fmt.Printf("%s%s[fanotify-guard]%s Überwache: %s%s%s\n", colorBold, colorCyan, colorReset, colorYellow, pc.Path, colorReset)
 		marked++
 	}
 
@@ -146,6 +146,9 @@ func main() {
 			if autoAllow {
 				response = unix.FAN_ALLOW
 				fmt.Printf("  → %sautomatisch erlaubt%s\n\n", colorGreen, colorReset)
+			} else if pathCfg := cfg.findPathConfig(filePath); pathCfg != nil && pathCfg.isBinaryAllowed(resolveProcessExe(event.Pid)) {
+				response = unix.FAN_ALLOW
+				fmt.Printf("  → %serlaubt (whitelisted binary)%s\n\n", colorGreen, colorReset)
 			} else {
 				_, alreadyCached := pidCache[pidFileKey{pid: event.Pid, path: filePath}]
 				response = resolveDecision(event.Pid, filePath, pidCache, func() uint32 {
@@ -214,6 +217,14 @@ func resolveDecision(pid int32, path string, cache map[pidFileKey]uint32, prompt
 func writeFanotifyResponse(fd int, data []byte) error {
 	_, err := unix.Write(fd, data)
 	return err
+}
+
+func resolveProcessExe(pid int32) string {
+	path, err := os.Readlink(fmt.Sprintf("/proc/%d/exe", pid))
+	if err != nil {
+		return ""
+	}
+	return path
 }
 
 func resolveFilePath(fd int32) string {
